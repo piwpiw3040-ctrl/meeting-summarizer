@@ -1,0 +1,30 @@
+# Environment & Secrets (สำคัญ: ไม่นำ API Key ขึ้นคลาวด์)
+.env
+.env.*
+!.env.example
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Audio files
+audio/
+completed/
+*.mp3
+*.m4a
+*.wav
+*.aac
+*.ogg
+*.flac
+*.mp4
+*.webm
+
+# Generated documents
+summaries/*.pdf
+summaries/*.docx
