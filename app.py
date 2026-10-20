@@ -340,6 +340,36 @@ def create_print_html(markdown_text: str, title: str = "บันทึกกา
     return html_template
 
 
+# ================= SECURITY / PIN LOCK =================
+APP_PIN = "304000"
+try:
+    if hasattr(st, "secrets") and "APP_PASSWORD" in st.secrets:
+        APP_PIN = str(st.secrets["APP_PASSWORD"]).strip()
+except Exception:
+    pass
+
+if not st.session_state.get("authenticated", False):
+    st.markdown("""
+    <div style="text-align: center; margin-top: 2rem; margin-bottom: 2rem;">
+        <div style="font-size: 3.5rem; margin-bottom: 0.5rem;">🔒</div>
+        <h2 style="color: #1B365D; margin-bottom: 0.2rem;">ระบบสรุปบันทึกการประชุม AI</h2>
+        <p style="color: #718096; font-size: 0.95rem;">พื้นที่ส่วนบุคคล — กรุณาใส่รหัสผ่านเพื่อเข้าใช้งาน</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("login_form"):
+        entered_pin = st.text_input("รหัสผ่าน (PIN):", type="password", placeholder="ใส่รหัสผ่าน 6 หลัก")
+        login_btn = st.form_submit_button("🔓 เข้าสู่ระบบ (Unlock)")
+        if login_btn:
+            if entered_pin.strip() == APP_PIN:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("❌ รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้งครับ")
+
+    st.stop()
+
+
 # ================= UI LAYOUT =================
 st.markdown("""
 <div style="text-align: center; margin-bottom: 1.5rem;">
@@ -393,6 +423,10 @@ with st.sidebar:
     3. เลือก **"เพิ่มลงในหน้าจอหลัก" (Add to Home screen)**
     4. จะได้ไอคอนแอปบนหน้าจอมือถือ กดเปิดใช้ได้ตลอดเวลา!
     """)
+    st.markdown("---")
+    if st.button("🔒 ล็อกหน้าจอ / ออกจากระบบ (Logout)", key="logout_btn"):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
 # Check API key
 active_key = api_key_input.strip() or api_key_env.strip()
