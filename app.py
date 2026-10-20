@@ -348,10 +348,30 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Read API Key from st.secrets or os.getenv
+api_key_env = ""
+try:
+    if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+        api_key_env = str(st.secrets["GEMINI_API_KEY"]).strip()
+except Exception:
+    pass
+
+if not api_key_env:
+    api_key_env = os.getenv("GEMINI_API_KEY", "").strip()
+
+# Read Model
+model_default = "gemini-3.8-flash"
+try:
+    if hasattr(st, "secrets") and "GEMINI_MODEL" in st.secrets:
+        model_default = str(st.secrets["GEMINI_MODEL"]).strip()
+except Exception:
+    pass
+if not model_default:
+    model_default = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+
 # Sidebar
 with st.sidebar:
     st.header("⚙️ การตั้งค่าระบบ")
-    api_key_env = os.getenv("GEMINI_API_KEY", "")
     api_key_input = st.text_input(
         "Google Gemini API Key:",
         value=api_key_env,
@@ -361,8 +381,10 @@ with st.sidebar:
     model_name = st.selectbox(
         "AI Model:",
         options=["gemini-3.8-flash", "gemini-flash-latest"],
-        index=0
+        index=0 if model_default == "gemini-3.8-flash" else 1
     )
+    if api_key_input or api_key_env:
+        st.success("✅ เชื่อมต่อ API Key แล้ว")
     st.markdown("---")
     st.markdown("### 📱 วิธีติดตั้งบนมือถือ Android")
     st.markdown("""
@@ -375,9 +397,25 @@ with st.sidebar:
 # Check API key
 active_key = api_key_input.strip() or api_key_env.strip()
 if not active_key or active_key == "YOUR_GEMINI_API_KEY_HERE":
-    st.warning("⚠️ กรุณาใส่ Gemini API Key ในแถบด้านข้าง (Sidebar) ก่อนเริ่มใช้งานครับ")
-    st.info("💡 สามารถขอ API Key ได้ฟรีที่: [Google AI Studio](https://aistudio.google.com/app/apikey)")
-    st.stop()
+    st.warning("⚠️ ยังไม่พบ Gemini API Key ในระบบ")
+    with st.expander("🔑 แตะที่นี่เพื่อใส่ API Key ของคุณได้ทันที", expanded=True):
+        main_key_input = st.text_input(
+            "วาง Gemini API Key ของคุณที่นี่:",
+            type="password",
+            placeholder="AIzaSy... หรือ AQ.Ab...",
+            help="ขอ API Key ฟรีได้ที่ https://aistudio.google.com/app/apikey"
+        )
+        if main_key_input:
+            st.session_state["custom_api_key"] = main_key_input.strip()
+            active_key = main_key_input.strip()
+            st.rerun()
+
+    if "custom_api_key" in st.session_state:
+        active_key = st.session_state["custom_api_key"]
+
+    if not active_key or active_key == "YOUR_GEMINI_API_KEY_HERE":
+        st.info("💡 **คำแนะนำ:**\n1. คุณสามารถวาง API Key ในกล่องข้อความด้านบนนี้ได้เลย หรือ\n2. ไปที่หน้าจัดการแอปบน Streamlit Cloud -> Settings -> Secrets แล้วใส่ `GEMINI_API_KEY = \"...\"`")
+        st.stop()
 
 # Tabs
 tab1, tab2 = st.tabs(["🎙️ สรุปไฟล์เสียงใหม่", "📚 ประวัติการประชุมที่ผ่านมา"])
