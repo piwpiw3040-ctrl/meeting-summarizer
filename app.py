@@ -241,7 +241,7 @@ with st.sidebar:
     )
     model_name = st.selectbox(
         "โมเดลหลัก (Primary Model):",
-        options=["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.7-flash"],
+        options=["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.0-flash"],
         index=0
     )
     st.markdown("---")
@@ -604,18 +604,21 @@ with st.container():
 
                 progress_bar.progress(65, text="🧠 AI กำลังสังเคราะห์บทสรุปและแยกแยะผู้พูด...")
 
-                # Fallback models loop
+                # Fallback models loop with verified active Google Gemini models
                 candidate_models = [model_name]
-                for m in ["gemini-flash-latest", "gemini-3.7-flash", "gemini-3.5-flash"]:
+                for m in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.0-flash"]:
                     if m not in candidate_models:
                         candidate_models.append(m)
 
                 raw_ai_text = None
-                max_retries = 3
+                last_error = None
 
-                for attempt in range(1, max_retries + 1):
-                    cur_model = candidate_models[(attempt - 1) % len(candidate_models)]
+                for attempt, cur_model in enumerate(candidate_models, 1):
                     try:
+                        progress_bar.progress(
+                            min(65 + attempt * 7, 95),
+                            text=f"🧠 กำลังให้ AI ({cur_model}) วิเคราะห์บทสรุป..."
+                        )
                         resp = client.models.generate_content(
                             model=cur_model,
                             contents=[uploaded_remote_file, prompt_content],
@@ -628,12 +631,17 @@ with st.container():
                         if raw_ai_text:
                             break
                     except Exception as ge:
+                        last_error = ge
                         err_str = str(ge)
-                        if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt < max_retries:
-                            progress_bar.progress(75, text="⚠️ ระบบหนาแน่น กำลังสลับโมเดลสำรองอัตโนมัติ...")
-                            time.sleep(6)
+                        if attempt < len(candidate_models):
+                            progress_bar.progress(
+                                min(65 + attempt * 7, 95),
+                                text=f"⚠️ โมเดล {cur_model} ไม่พร้อม กำลังสลับไปยังโมเดลถัดไป..."
+                            )
+                            time.sleep(3)
+                            continue
                         else:
-                            raise ge
+                            raise last_error
 
                 if not raw_ai_text:
                     raise ValueError("ไม่ได้รับข้อมูลตอบกลับจากโมเดล")

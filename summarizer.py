@@ -226,14 +226,13 @@ def main():
             summary_text = None
             max_retries = 3
             candidate_models = [model_name]
-            for m in ["gemini-flash-latest", "gemini-3.7-flash", "gemini-3.5-flash"]:
+            for m in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.0-flash"]:
                 if m not in candidate_models:
                     candidate_models.append(m)
 
-            for attempt in range(1, max_retries + 1):
-                cur_model = candidate_models[(attempt - 1) % len(candidate_models)]
+            for attempt, cur_model in enumerate(candidate_models, 1):
                 try:
-                    print(f"   🧠 กำลังให้โมเดล {cur_model} วิเคราะห์และสรุปเนื้อหาการประชุม... (รอบที่ {attempt}/{max_retries})")
+                    print(f"   🧠 กำลังให้โมเดล {cur_model} วิเคราะห์และสรุปเนื้อหาการประชุม...")
                     response = client.models.generate_content(
                         model=cur_model,
                         contents=[
@@ -248,10 +247,10 @@ def main():
                     if summary_text:
                         break
                 except Exception as gen_err:
-                    err_str = str(gen_err)
-                    if ("503" in err_str or "UNAVAILABLE" in err_str or "high demand" in err_str) and attempt < max_retries:
-                        print(f"   ⚠️ เซิร์ฟเวอร์กำลังหนาแน่น (503) กำลังรอ 10 วินาทีเพื่อลองใหม่...")
-                        time.sleep(10)
+                    if attempt < len(candidate_models):
+                        print(f"   ⚠️ โมเดล {cur_model} พบข้อผิดพลาด กำลังสลับไปยังโมเดลถัดไป...")
+                        time.sleep(3)
+                        continue
                     else:
                         raise gen_err
 
