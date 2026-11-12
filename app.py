@@ -423,20 +423,37 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
         'summary_markdown_template': str
     }
     """
-    default_summary = raw_text if isinstance(raw_text, str) else str(raw_text or "")
+    if obj is None or isinstance(obj, bool):
+        return {
+            "speakers": [],
+            "summary_markdown_template": ""
+        }
 
     # 1. String: unwrap potential double-encoded JSON or fallback to text
     if isinstance(obj, str):
         cleaned_str = obj.strip()
-        if (cleaned_str.startswith("{") and cleaned_str.endswith("}")) or (cleaned_str.startswith("[") and cleaned_str.endswith("]")):
+        if not cleaned_str or cleaned_str.lower() == "null":
+            return {
+                "speakers": [],
+                "summary_markdown_template": ""
+            }
+        if "{" in cleaned_str or "[" in cleaned_str:
             try:
                 nested = json.loads(cleaned_str, strict=False)
-                return _normalize_parsed_data(nested, raw_text)
+                if nested != obj:
+                    return _normalize_parsed_data(nested, raw_text)
             except Exception:
                 pass
+            fence_match = re.search(r"```(?:json)?\s*\n([\s\S]*)\n```", cleaned_str)
+            if fence_match:
+                try:
+                    nested = json.loads(fence_match.group(1).strip(), strict=False)
+                    return _normalize_parsed_data(nested, raw_text)
+                except Exception:
+                    pass
         return {
             "speakers": [],
-            "summary_markdown_template": cleaned_str or default_summary
+            "summary_markdown_template": cleaned_str
         }
 
     # 2. List / Array: model returned array of speakers or list wrapping object
@@ -450,7 +467,7 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
         extracted_speakers = []
         for idx, item in enumerate(obj):
             if isinstance(item, dict):
-                spk_id = str(item.get("speaker_id") or item.get("name") or f"ผู้พูด {idx+1}").strip()
+                spk_id = str(item.get("speaker_id") or item.get("name") or "").strip() or f"ผู้พูด {idx+1}"
                 extracted_speakers.append({
                     "speaker_id": spk_id,
                     "voice_traits": str(item.get("voice_traits") or "").strip(),
@@ -458,15 +475,16 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
                     "suggested_role": str(item.get("suggested_role") or "").strip(),
                 })
             elif item is not None:
+                spk_id = str(item).strip() or f"ผู้พูด {idx+1}"
                 extracted_speakers.append({
-                    "speaker_id": str(item).strip() or f"ผู้พูด {idx+1}",
+                    "speaker_id": spk_id,
                     "voice_traits": "",
                     "sample_quote": "",
                     "suggested_role": "",
                 })
         return {
             "speakers": extracted_speakers,
-            "summary_markdown_template": default_summary
+            "summary_markdown_template": ""
         }
 
     # 3. Dict: object structure
@@ -476,7 +494,7 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
         if isinstance(raw_speakers, list):
             for idx, item in enumerate(raw_speakers):
                 if isinstance(item, dict):
-                    spk_id = str(item.get("speaker_id") or f"ผู้พูด {idx+1}").strip()
+                    spk_id = str(item.get("speaker_id") or item.get("name") or "").strip() or f"ผู้พูด {idx+1}"
                     extracted_speakers.append({
                         "speaker_id": spk_id,
                         "voice_traits": str(item.get("voice_traits") or "").strip(),
@@ -484,8 +502,9 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
                         "suggested_role": str(item.get("suggested_role") or "").strip(),
                     })
                 elif item is not None:
+                    spk_id = str(item).strip() or f"ผู้พูด {idx+1}"
                     extracted_speakers.append({
-                        "speaker_id": str(item).strip() or f"ผู้พูด {idx+1}",
+                        "speaker_id": spk_id,
                         "voice_traits": "",
                         "sample_quote": "",
                         "suggested_role": "",
@@ -493,7 +512,7 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
         elif isinstance(raw_speakers, dict):
             for k, v in raw_speakers.items():
                 if isinstance(v, dict):
-                    spk_id = str(v.get("speaker_id") or k).strip()
+                    spk_id = str(v.get("speaker_id") or k or "").strip() or f"ผู้พูด {len(extracted_speakers)+1}"
                     extracted_speakers.append({
                         "speaker_id": spk_id,
                         "voice_traits": str(v.get("voice_traits") or "").strip(),
@@ -501,8 +520,9 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
                         "suggested_role": str(v.get("suggested_role") or "").strip(),
                     })
                 else:
+                    spk_id = str(k).strip() or f"ผู้พูด {len(extracted_speakers)+1}"
                     extracted_speakers.append({
-                        "speaker_id": str(k).strip(),
+                        "speaker_id": spk_id,
                         "voice_traits": "",
                         "sample_quote": "",
                         "suggested_role": str(v or "").strip(),
@@ -516,7 +536,7 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
                     break
 
         if raw_template is None:
-            template_str = default_summary
+            template_str = ""
         elif isinstance(raw_template, str):
             template_str = raw_template
             trimmed_tpl = template_str.strip()
@@ -527,6 +547,10 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
                         return _normalize_parsed_data(nested_dict, raw_text)
                 except Exception:
                     pass
+        elif isinstance(raw_template, list):
+            template_str = "\n\n".join(str(x) for x in raw_template if x is not None)
+        elif isinstance(raw_template, dict):
+            template_str = str(raw_template.get("text") or raw_template.get("content") or "")
         else:
             template_str = str(raw_template)
 
@@ -535,10 +559,10 @@ def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
             "summary_markdown_template": template_str
         }
 
-    # 4. Fallback for None or unsupported types
+    # 4. Fallback for any other type
     return {
         "speakers": [],
-        "summary_markdown_template": default_summary
+        "summary_markdown_template": ""
     }
 
 
@@ -554,7 +578,7 @@ def parse_gemini_response(response_text: str) -> dict:
         response_text = str(response_text)
 
     cleaned = response_text.strip()
-    if not cleaned:
+    if not cleaned or cleaned.lower() == "null":
         return {"speakers": [], "summary_markdown_template": ""}
 
     # 1. Direct parse attempt
@@ -574,23 +598,20 @@ def parse_gemini_response(response_text: str) -> dict:
         except Exception:
             pass
 
-    # 3. Try raw_decode with strict=False starting from each '{' found
+    # 3. Try raw_decode starting from each '{' or '[' found
     decoder = json.JSONDecoder(strict=False)
-    start_pos = 0
-    while True:
-        idx = cleaned.find('{', start_pos)
-        if idx == -1:
-            break
+    for m in re.finditer(r"[\{\[]", cleaned):
         try:
-            obj, end_idx = decoder.raw_decode(cleaned, idx)
-            if isinstance(obj, dict) and ("speakers" in obj or "summary_markdown_template" in obj):
-                return _normalize_parsed_data(obj, cleaned)
+            obj, _ = decoder.raw_decode(cleaned, m.start())
+            if isinstance(obj, (dict, list)):
+                norm = _normalize_parsed_data(obj, cleaned)
+                if norm.get("speakers") or norm.get("summary_markdown_template"):
+                    return norm
         except Exception:
             pass
-        start_pos = idx + 1
 
-    # 4. Outermost JSON object { ... } regex fallback
-    json_match = re.search(r"(\{[\s\S]*\})", cleaned)
+    # 4. Outermost JSON object { ... } or array [ ... ] regex fallback
+    json_match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", cleaned)
     if json_match:
         try:
             parsed = json.loads(json_match.group(1), strict=False)
@@ -631,10 +652,9 @@ def apply_speaker_mapping(template_text: str, speaker_mapping: dict) -> str:
             chosen_name = str(raw_real_name).strip() or spk_id
 
         esc_spk = re.escape(spk_id)
-        # Replace {{spk_id}} with optional surrounding spaces
-        result = re.sub(r'\{\{\s*' + esc_spk + r'\s*\}\}', chosen_name, result)
-        # Replace [spk_id] with optional surrounding spaces
-        result = re.sub(r'\[\s*' + esc_spk + r'\s*\]', chosen_name, result)
+        # Use callable replacement in re.sub to avoid backslash / escape pattern crashes (e.g. \1, \g)
+        result = re.sub(r'\{\{\s*' + esc_spk + r'\s*\}\}', lambda _m, name=chosen_name: name, result)
+        result = re.sub(r'\[\s*' + esc_spk + r'\s*\]', lambda _m, name=chosen_name: name, result)
     return result
 
 
@@ -722,6 +742,10 @@ with st.container():
         analyze_btn = st.button("🚀 เริ่มวิเคราะห์และสรุปการประชุม")
 
         if analyze_btn:
+            if audio_file.size == 0:
+                st.error("❌ ไฟล์เสียงมีขนาด 0 ไบต์ ไม่สามารถประมวลผลได้ โปรดเลือกไฟล์เสียงที่ถูกต้อง")
+                st.stop()
+
             # Clear previous speaker & meeting session state to prevent contamination
             for k in list(st.session_state.keys()):
                 if k.startswith("spk_name_") or k.startswith("spk_input_"):
@@ -933,10 +957,6 @@ if (
 
     # Apply real-time mapping
     final_summary_md = apply_speaker_mapping(raw_template, current_speaker_map)
-elif "meeting_data" in st.session_state:
-    # Auto-heal: Purge corrupted legacy state
-    st.session_state.pop("meeting_data", None)
-    st.session_state.pop("meeting_title", None)
 
     # Step 3: Action Bar & Downloads
     st.markdown('<div class="ios-card">', unsafe_allow_html=True)
@@ -997,3 +1017,12 @@ elif "meeting_data" in st.session_state:
     st.markdown("<h4 style='margin-top:0; color:#1C1C1E;'>📋 ตัวอย่างเนื้อหาบทสรุปการประชุม</h4>", unsafe_allow_html=True)
     st.markdown(final_summary_md)
     st.markdown('</div>', unsafe_allow_html=True)
+
+elif "meeting_data" in st.session_state:
+    # Auto-heal: Purge corrupted legacy state
+    st.session_state.pop("meeting_data", None)
+    st.session_state.pop("meeting_title", None)
+    for k in list(st.session_state.keys()):
+        if k.startswith("spk_name_") or k.startswith("spk_input_"):
+            st.session_state.pop(k, None)
+    st.warning("⚠️ ข้อมูลการประชุมในระบบไม่สมบูรณ์ ระบบได้รีเซ็ตสถานะแล้ว โปรดเลือกไฟล์เสียงเพื่อประมวลผลใหม่อีกครั้ง")

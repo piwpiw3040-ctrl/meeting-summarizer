@@ -294,11 +294,21 @@ def test_layer2_robust_json_normalization():
     assert res_empty["speakers"] == []
     assert res_empty["summary_markdown_template"] == ""
 
-    # 2. JSON "null" response
+    # 2. JSON "null", "[]", "{}" responses must normalize summary_markdown_template to empty string
     res_null = parse_gemini_response("null")
     assert isinstance(res_null, dict)
     assert res_null["speakers"] == []
-    assert res_null["summary_markdown_template"] == "null"
+    assert res_null["summary_markdown_template"] == ""
+
+    res_empty_arr = parse_gemini_response("[]")
+    assert isinstance(res_empty_arr, dict)
+    assert res_empty_arr["speakers"] == []
+    assert res_empty_arr["summary_markdown_template"] == ""
+
+    res_empty_obj = parse_gemini_response("{}")
+    assert isinstance(res_empty_obj, dict)
+    assert res_empty_obj["speakers"] == []
+    assert res_empty_obj["summary_markdown_template"] == ""
 
     # 3. Model returned array of speaker objects instead of root object
     raw_array = json.dumps([
@@ -311,6 +321,14 @@ def test_layer2_robust_json_normalization():
     assert res_array["speakers"][0]["speaker_id"] == "ผู้พูด A"
     assert res_array["speakers"][1]["speaker_id"] == "ผู้พูด B"
     assert isinstance(res_array["summary_markdown_template"], str)
+
+    # Array embedded in conversational text without code fences
+    raw_arr_text = 'Here is the analysis:\n[{"speaker_id": "ผู้พูด 1", "suggested_role": "ประธาน"}]'
+    res_arr_text = parse_gemini_response(raw_arr_text)
+    assert isinstance(res_arr_text, dict)
+    assert len(res_arr_text["speakers"]) == 1
+    assert res_arr_text["speakers"][0]["speaker_id"] == "ผู้พูด 1"
+    assert res_arr_text["speakers"][0]["suggested_role"] == "ประธาน"
 
     # 4. Model returned array of strings
     raw_str_array = '["ผู้พูด 1", "ผู้พูด 2"]'
@@ -367,6 +385,17 @@ def test_layer2_robust_json_normalization():
     assert len(res_spk_dict["speakers"]) == 1
     assert res_spk_dict["speakers"][0]["speaker_id"] == "spk1"
     assert res_spk_dict["speakers"][0]["suggested_role"] == "บทบาทผู้จัดการ"
+
+    # 9. summary_markdown_template is null in JSON dict (must not leak raw json into template)
+    raw_null_tpl = '{"speakers": [], "summary_markdown_template": null}'
+    res_null_tpl = parse_gemini_response(raw_null_tpl)
+    assert isinstance(res_null_tpl, dict)
+    assert res_null_tpl["summary_markdown_template"] == ""
+
+    # 10. speaker_id is blank or whitespace (must fallback safely to ผู้พูด 1)
+    raw_blank_spk = '{"speakers": [{"speaker_id": "   "}], "summary_markdown_template": "test"}'
+    res_blank_spk = parse_gemini_response(raw_blank_spk)
+    assert res_blank_spk["speakers"][0]["speaker_id"] == "ผู้พูด 1"
 
     print("  -> Passed!")
 
@@ -431,7 +460,7 @@ def test_layer3_atomic_commit_and_rollback():
 def test_layer4_step2_ui_guard():
     print("[12/13] Testing Layer 4: Step 2 UI Guard & Safe Speaker Extraction...")
 
-    # Check guard condition function
+    # Guard condition
     def step2_guard_active(state: dict) -> bool:
         return (
             "meeting_data" in state
@@ -473,6 +502,57 @@ def test_layer4_step2_ui_guard():
             assert spk_id == "spk_string_item"
         else:
             assert spk_id == "spk2"
+
+    # 6. Test full branching structure simulation:
+    # Ensure auto-heal cleans corrupted state without crashing on undefined variables (e.g. final_summary_md)
+    corrupted_session = {"meeting_data": ["corrupt_list"], "meeting_title": "Old Title"}
+    executed_branch = None
+    if (
+        "meeting_data" in corrupted_session
+        and isinstance(corrupted_session["meeting_data"], dict)
+        and "summary_markdown_template" in corrupted_session["meeting_data"]
+    ):
+        executed_branch = "valid_flow"
+        final_summary_md = "valid_summary"
+    elif "meeting_data" in corrupted_session:
+        executed_branch = "auto_heal"
+        corrupted_session.pop("meeting_data", None)
+        corrupted_session.pop("meeting_title", None)
+
+    assert executed_branch == "auto_heal"
+    assert "meeting_data" not in corrupted_session
+    assert "meeting_title" not in corrupted_session
+
+    # Ensure valid state executes valid flow and downloads are reachable
+    valid_session = {
+        "meeting_data": {
+            "speakers": [{"speaker_id": "ผู้พูด A"}],
+            "summary_markdown_template": "# สรุปการประชุม"
+        },
+        "meeting_title": "ประชุมทีม"
+    }
+    executed_branch = None
+    if (
+        "meeting_data" in valid_session
+        and isinstance(valid_session["meeting_data"], dict)
+        and "summary_markdown_template" in valid_session["meeting_data"]
+    ):
+        executed_branch = "valid_flow"
+        meeting_data = valid_session["meeting_data"]
+        meeting_title = str(valid_session.get("meeting_title", "บันทึกการประชุม") or "บันทึกการประชุม")
+        speakers = meeting_data.get("speakers") if isinstance(meeting_data.get("speakers"), list) else []
+        raw_template = str(meeting_data.get("summary_markdown_template") or "")
+        current_map = {"ผู้พูด A": "คุณสมชาย"}
+        final_summary_md = apply_speaker_mapping(raw_template, current_map)
+        # Verify downloads can be generated in this branch
+        pdf_out = create_pdf_bytes(final_summary_md, title=meeting_title)
+        docx_out = create_docx_bytes(final_summary_md)
+        assert len(pdf_out) > 0
+        assert len(docx_out) > 0
+    elif "meeting_data" in valid_session:
+        executed_branch = "auto_heal"
+
+    assert executed_branch == "valid_flow"
     print("  -> Passed!")
 
 
@@ -517,6 +597,16 @@ def test_layer5_typesafe_speaker_mapping():
     }
     res_brackets = apply_speaker_mapping(tpl_brackets, mapping_valid)
     assert res_brackets == "สรุปโดย คุณสมชาย และ คุณสมหญิง"
+
+    # 7. Regex escape and backslash safety (e.g. \1, \g<0>, backslashes in Windows paths)
+    tpl_escapes = "แฟ้มข้อมูล: {{ ผู้พูด 1 }} และตำแหน่ง: {{ ผู้พูด 2 }}"
+    mapping_escapes = {
+        "ผู้พูด 1": r"C:\Windows\System32\1",
+        "ผู้พูด 2": r"Dr. \1 Special & \g<0>",
+    }
+    res_escapes = apply_speaker_mapping(tpl_escapes, mapping_escapes)
+    assert r"C:\Windows\System32\1" in res_escapes
+    assert r"Dr. \1 Special & \g<0>" in res_escapes
     print("  -> Passed!")
 
 
