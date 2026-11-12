@@ -23,7 +23,16 @@ class MeetingPDF(FPDF):
             self.set_text_color(120, 130, 140)
             avail_w = self.w - self.l_margin - self.r_margin
             half_w = avail_w / 2
-            self.cell(half_w, 8, self.doc_title, align=Align.L)
+
+            # Truncate title if it exceeds half width to prevent collision with right header
+            display_title = self.doc_title
+            max_title_w = half_w - 6
+            if self.get_string_width(display_title) > max_title_w:
+                while len(display_title) > 3 and self.get_string_width(display_title + "...") > max_title_w:
+                    display_title = display_title[:-1]
+                display_title += "..."
+
+            self.cell(half_w, 8, display_title, align=Align.L)
             self.cell(half_w, 8, "เอกสารสรุปการประชุม AI", align=Align.R, new_x="LMARGIN", new_y="NEXT")
             self.set_draw_color(220, 225, 230)
             self.set_line_width(0.3)
@@ -140,8 +149,9 @@ def create_pdf_bytes(markdown_text: str, title: str = "บันทึกกา�
                         row_style = even_style if r_idx % 2 == 1 else odd_style
                         for c_idx in range(col_count):
                             val = r_data[c_idx] if c_idx < len(r_data) else ""
+                            clean_val = val.replace("**", "")
                             c_align = Align.C if c_idx in [0, col_count - 1] else Align.L
-                            d_row.cell(val, align=c_align, style=row_style)
+                            d_row.cell(clean_val, align=c_align, style=row_style)
                 pdf.ln(3)
             continue
 

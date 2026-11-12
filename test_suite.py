@@ -20,19 +20,23 @@ from summarizer import SUMMARY_PROMPT
 
 
 def test_thai_filename_regex():
-    print("[1/8] Testing Thai filename regex...")
+    print("[1/8] Testing Thai filename regex & CRLF sanitization...")
     titles = [
         ("การประชุมทีมก้าวหน้า_ประจำสัปดาห์", "การประชุมทีมก้าวหน้า_ประจำสัปดาห์"),
         ("ประชุมผู้บริหาร 14/10/2026: สรุปโปรเจกต์", "ประชุมผู้บริหาร 14102026 สรุปโปรเจกต์"),
         ("Meeting (Special) [Q3] {Draft} *Urgent*", "Meeting Special Q3 Draft Urgent"),
+        ("หัวข้อ\nมีขึ้น\r\nบรรทัดใหม่", "หัวข้อ มีขึ้น บรรทัดใหม่"),
         ("   ", "meeting"),
     ]
     for raw, expected in titles:
-        safe = re.sub(r'[^\w\s\u0e00-\u0e7f-]', '', raw).strip() or "meeting"
+        safe = re.sub(r'[\r\n\t]+', ' ', raw)
+        safe = re.sub(r'[^\w\s\u0e00-\u0e7f-]', '', safe)
+        safe = re.sub(r'\s+', ' ', safe).strip() or "meeting"
         assert safe == expected, f"Regex failed for '{raw}': got '{safe}', expected '{expected}'"
         # Verify Thai tone marks and vowels are NOT lost
         if "ก้าวหน้า" in raw:
             assert "ก้าวหน้า" in safe, f"Thai tone marks stripped! Got '{safe}'"
+        assert "\n" not in safe and "\r" not in safe, f"CRLF leak in filename '{safe}'"
     print("  -> Passed!")
 
 
@@ -45,7 +49,7 @@ def test_json_parsing_with_code_blocks():
     assert len(res1["speakers"]) == 1
     assert res1["summary_markdown_template"] == "Hello"
 
-    # 2. Markdown fence with inner code block (THIS CAUSED TRUNCATION BEFORE)
+    # 2. Markdown fence with inner code block (nested fence)
     raw2 = """```json
 {
   "speakers": [
@@ -71,11 +75,38 @@ def test_json_parsing_with_code_blocks():
     res3 = parse_gemini_response(raw3)
     assert res3["summary_markdown_template"] == "Plain summary"
 
-    # 4. Fallback on invalid JSON
-    raw4 = "Just plain markdown without any JSON structure"
+    # 4. Advanced edge case: JSON containing raw unescaped newlines and followed by postamble text with curly braces
+    raw4 = """Here is the executive summary:
+```json
+{
+  "speakers": [
+    {
+      "speaker_id": "ผู้พูด A",
+      "voice_traits": "เสียงผู้ชาย ทุ้มลึก สุขุม",
+      "sample_quote": "ยินดีต้อนรับทุกท่านครับ",
+      "suggested_role": "ประธาน"
+    }
+  ],
+  "summary_markdown_template": "เนื้อหาบรรทัด 1
+```python
+x = 10
+print(x)
+```
+เนื้อหาบรรทัด 2"
+}
+```
+Note: You can replace {speaker_id} with actual attendee names.
+"""
     res4 = parse_gemini_response(raw4)
-    assert res4["speakers"] == []
-    assert res4["summary_markdown_template"] == raw4
+    assert len(res4["speakers"]) == 1
+    assert res4["speakers"][0]["speaker_id"] == "ผู้พูด A"
+    assert "x = 10" in res4["summary_markdown_template"]
+
+    # 5. Fallback on invalid JSON
+    raw5 = "Just plain markdown without any JSON structure"
+    res5 = parse_gemini_response(raw5)
+    assert res5["speakers"] == []
+    assert res5["summary_markdown_template"] == raw5
 
     print("  -> Passed!")
 
@@ -133,8 +164,8 @@ def test_hmac_pin_verification():
 
 
 def test_speaker_mapping():
-    print("[6/8] Testing speaker mapping...")
-    template = "# สรุป\n- ผู้รับผิดชอบ: {{ผู้พูด A}} และ [ผู้พูด B]"
+    print("[6/8] Testing speaker mapping (with flexible whitespace)...")
+    template = "# สรุป\n- ผู้รับผิดชอบ: {{ผู้พูด A}}, {{ ผู้พูด A }} และ [ผู้พูด B], [ ผู้พูด B ]"
     mapping = {
         "ผู้พูด A": "คุณสมชาย (CTO)",
         "ผู้พูด B": "คุณสมหญิง (PM)",
@@ -143,7 +174,9 @@ def test_speaker_mapping():
     assert "คุณสมชาย (CTO)" in result
     assert "คุณสมหญิง (PM)" in result
     assert "{{ผู้พูด A}}" not in result
+    assert "{{ ผู้พูด A }}" not in result
     assert "[ผู้พูด B]" not in result
+    assert "[ ผู้พูด B ]" not in result
 
     # Test fallback to spk_id if user left it blank
     mapping_empty = {
@@ -157,21 +190,22 @@ def test_speaker_mapping():
 
 
 def test_pdf_table_and_header():
-    print("[7/8] Testing PDF generation (table crash fix + multi-page header)...")
+    print("[7/8] Testing PDF generation (table crash fix + multi-page header + long title truncation)...")
     
     # 1. Document starting directly with table (previously crashed FPDF with FPDFException)
     table_first_md = """| ลำดับ | รายการ | ผู้รับผิดชอบ | กำหนดส่ง | หมายเหตุ |
 | :---: | :--- | :--- | :--- | :--- |
-| 1 | ปรับปรุงระบบรักษาความปลอดภัย | คุณวิชาญ | 15 พ.ย. 2026 | สำคัญมาก |
+| 1 | ปรับปรุงระบบรักษาความปลอดภัย | **คุณวิชาญ** | 15 พ.ย. 2026 | สำคัญมาก |
 | 2 | ออกแบบสถาปัตยกรรมคลาวด์ | คุณกัญญา | 20 พ.ย. 2026 | ปกติ |
 """
     pdf_bytes1 = create_pdf_bytes(table_first_md, title="ตารางงานสำคัญ")
     assert len(pdf_bytes1) > 1000, "PDF 1 too small"
     assert pdf_bytes1.startswith(b"%PDF"), "Not valid PDF bytes"
 
-    # 2. Multi-page document to trigger header() on page 2+
+    # 2. Multi-page document with an ultra-long title to verify header truncation and collision avoidance
+    ultra_long_title = "การประชุมคณะกรรมการบริหารฝ่ายวิศวกรรมซอฟต์แวร์และการพัฒนาสถาปัตยกรรมคลาวด์ระดับองค์กร ประจำไตรมาสที่ 4 ปี 2026 อย่างเป็นทางการ"
     long_content = [
-        "# บันทึกการประชุมผู้บริหารระดับสูง",
+        f"# {ultra_long_title}",
         "## วาระที่ 1: การรายงานความคืบหน้าระบบ",
     ]
     for i in range(80):
@@ -182,7 +216,7 @@ def test_pdf_table_and_header():
 | 1 | ตรวจสอบระบบ | คุณเอก | ทันที |
 """)
     multi_page_md = "\n".join(long_content)
-    pdf_bytes2 = create_pdf_bytes(multi_page_md, title="การประชุมใหญ่สามัญ")
+    pdf_bytes2 = create_pdf_bytes(multi_page_md, title=ultra_long_title)
     assert len(pdf_bytes2) > 10000, "Multi-page PDF too small"
     assert pdf_bytes2.startswith(b"%PDF"), "Not valid PDF bytes"
 

@@ -203,7 +203,10 @@ def main():
                 check_round += 1
                 print(f"   ⏳ กำลังประมวลผลไฟล์เสียงบนคลาวด์... รอ 5 วินาที (รอบที่ {check_round}/{max_check_rounds})")
                 time.sleep(5)
-                uploaded_remote_file = client.files.get(name=uploaded_remote_file.name)
+                try:
+                    uploaded_remote_file = client.files.get(name=uploaded_remote_file.name)
+                except Exception:
+                    pass
 
             if uploaded_remote_file.state.name == "PROCESSING":
                 raise TimeoutError("การประมวลผลไฟล์เสียงบน Gemini API ใช้เวลานานเกินกำหนด (Timeout 5 นาที)")

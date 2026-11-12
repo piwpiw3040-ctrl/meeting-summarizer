@@ -218,14 +218,24 @@ if not model_default:
 
 # Resolve initial active key (including any custom key already stored in session)
 stored_key = st.session_state.get("custom_api_key", "").strip()
+if stored_key == "YOUR_GEMINI_API_KEY_HERE":
+    stored_key = ""
+
+if api_key_env == "YOUR_GEMINI_API_KEY_HERE":
+    api_key_env = ""
+
 initial_key = stored_key or api_key_env
+
+# Keep sidebar widget state synchronized
+if "sidebar_api_key_input" not in st.session_state:
+    st.session_state["sidebar_api_key_input"] = initial_key
 
 # Sidebar: Preferences & Logout
 with st.sidebar:
     st.header("⚙️ การตั้งค่าระบบ")
     api_key_input = st.text_input(
         "Google Gemini API Key:",
-        value=initial_key,
+        key="sidebar_api_key_input",
         type="password",
         help="ขอ API Key ฟรีได้ที่ https://aistudio.google.com/app/apikey"
     )
@@ -244,12 +254,12 @@ with st.sidebar:
         st.rerun()
 
 # Resolve API Key: evaluate sidebar input, stored session key, and env
-active_key = (
-    api_key_input.strip()
-    or st.session_state.get("custom_api_key", "").strip()
-    or api_key_env.strip()
-)
-if not active_key or active_key == "YOUR_GEMINI_API_KEY_HERE":
+sidebar_val = api_key_input.strip()
+if sidebar_val == "YOUR_GEMINI_API_KEY_HERE":
+    sidebar_val = ""
+
+active_key = sidebar_val or stored_key or api_key_env
+if not active_key:
     st.warning("⚠️ ยังไม่พบ Gemini API Key ในระบบ")
     with st.expander("🔑 แตะที่นี่เพื่อใส่ API Key ของคุณได้ทันที", expanded=True):
         main_key_input = st.text_input(
@@ -259,7 +269,9 @@ if not active_key or active_key == "YOUR_GEMINI_API_KEY_HERE":
             help="ขอ API Key ฟรีได้ที่ https://aistudio.google.com/app/apikey"
         )
         if main_key_input:
-            st.session_state["custom_api_key"] = main_key_input.strip()
+            key_val = main_key_input.strip()
+            st.session_state["custom_api_key"] = key_val
+            st.session_state["sidebar_api_key_input"] = key_val
             st.rerun()
 
     st.info("💡 สามารถขอ API Key ฟรีได้ที่ Google AI Studio แล้วนำมาวางในกล่องข้อความด้านบนครับ")
@@ -405,28 +417,44 @@ def create_docx_bytes(markdown_text: str) -> bytes:
 
 
 def parse_gemini_response(response_text: str) -> dict:
-    """Robustly parse JSON response from Gemini, handling markdown code fences and nested code blocks."""
+    """Robustly parse JSON response from Gemini, handling markdown code fences, unescaped newlines, and nested code blocks."""
     cleaned = response_text.strip()
 
     # 1. Direct parse attempt
     try:
-        return json.loads(cleaned)
+        return json.loads(cleaned, strict=False)
     except Exception:
         pass
 
-    # 2. Extract outermost JSON object { ... } using regex
-    json_match = re.search(r"(\{[\s\S]*\})", cleaned)
-    if json_match:
+    # 2. Outermost markdown code fence
+    fence_match = re.search(r"```(?:json)?\s*\n([\s\S]*)\n```", cleaned)
+    if fence_match:
+        fence_content = fence_match.group(1).strip()
         try:
-            return json.loads(json_match.group(1))
+            return json.loads(fence_content, strict=False)
         except Exception:
             pass
 
-    # 3. Strip code fence if present
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
-    if fence_match:
+    # 3. Try raw_decode with strict=False starting from each '{' found
+    decoder = json.JSONDecoder(strict=False)
+    start_pos = 0
+    while True:
+        idx = cleaned.find('{', start_pos)
+        if idx == -1:
+            break
         try:
-            return json.loads(fence_match.group(1).strip())
+            obj, end_idx = decoder.raw_decode(cleaned, idx)
+            if isinstance(obj, dict) and ("speakers" in obj or "summary_markdown_template" in obj):
+                return obj
+        except Exception:
+            pass
+        start_pos = idx + 1
+
+    # 4. Outermost JSON object { ... } regex fallback
+    json_match = re.search(r"(\{[\s\S]*\})", cleaned)
+    if json_match:
+        try:
+            return json.loads(json_match.group(1), strict=False)
         except Exception:
             pass
 
@@ -441,11 +469,14 @@ def apply_speaker_mapping(template_text: str, speaker_mapping: dict) -> str:
     """Replace {{speaker_id}} or [speaker_id] placeholders with real user-entered names."""
     result = template_text
     for spk_id, real_name in speaker_mapping.items():
+        if not spk_id:
+            continue
         chosen_name = real_name.strip() if real_name and real_name.strip() else spk_id
-        # Replace {{Speaker X}}
-        result = result.replace(f"{{{{{spk_id}}}}}", chosen_name)
-        # Replace [Speaker X]
-        result = result.replace(f"[{spk_id}]", chosen_name)
+        esc_spk = re.escape(spk_id.strip())
+        # Replace {{spk_id}} with optional surrounding spaces
+        result = re.sub(r'\{\{\s*' + esc_spk + r'\s*\}\}', chosen_name, result)
+        # Replace [spk_id] with optional surrounding spaces
+        result = re.sub(r'\[\s*' + esc_spk + r'\s*\]', chosen_name, result)
     return result
 
 
@@ -511,10 +542,12 @@ with st.container():
         analyze_btn = st.button("🚀 เริ่มวิเคราะห์และสรุปการประชุม")
 
         if analyze_btn:
-            # Clear previous speaker session state to prevent contamination
+            # Clear previous speaker & meeting session state to prevent contamination
             for k in list(st.session_state.keys()):
                 if k.startswith("spk_name_") or k.startswith("spk_input_"):
                     del st.session_state[k]
+            st.session_state.pop("meeting_data", None)
+            st.session_state.pop("meeting_title", None)
 
             tmp_path = None
             uploaded_remote_file = None
@@ -554,7 +587,10 @@ with st.container():
                     progress_val = min(25 + int((check_round / max_check_rounds) * 20), 45)
                     progress_bar.progress(progress_val, text=f"⏳ ระบบกำลังถอดความและแยกแยะเสียงผู้พูด... ({check_round * 3}s)")
                     time.sleep(3)
-                    uploaded_remote_file = client.files.get(name=uploaded_remote_file.name)
+                    try:
+                        uploaded_remote_file = client.files.get(name=uploaded_remote_file.name)
+                    except Exception:
+                        pass
 
                 if uploaded_remote_file.state.name == "PROCESSING":
                     raise TimeoutError("การประมวลผลไฟล์เสียงบน Gemini API ใช้เวลานานเกินกำหนด (Timeout 3 นาที)")
@@ -689,7 +725,9 @@ if "meeting_data" in st.session_state:
     st.markdown("<h4 style='margin-top:0; color:#1C1C1E;'>📥 ดาวน์โหลดเอกสารสรุปการประชุม</h4>", unsafe_allow_html=True)
     st.caption("ไฟล์ PDF แท้ จัดสระและวรรณยุกต์ภาษาไทยสมบูรณ์แบบ เปิดอ่านหรือส่งต่อใน LINE ได้ทันที:")
 
-    safe_title = re.sub(r'[^\w\s\u0e00-\u0e7f-]', '', meeting_title).strip() or "meeting"
+    safe_title = re.sub(r'[\r\n\t]+', ' ', meeting_title)
+    safe_title = re.sub(r'[^\w\s\u0e00-\u0e7f-]', '', safe_title)
+    safe_title = re.sub(r'\s+', ' ', safe_title).strip() or "meeting"
 
     col_pdf, col_docx, col_md = st.columns(3)
 
