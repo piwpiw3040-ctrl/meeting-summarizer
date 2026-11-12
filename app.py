@@ -416,22 +416,161 @@ def create_docx_bytes(markdown_text: str) -> bytes:
     return buffer.getvalue()
 
 
+def _normalize_parsed_data(obj: any, raw_text: str = "") -> dict:
+    """Normalize any parsed JSON structure or object into a guaranteed dict:
+    {
+        'speakers': list of dicts,
+        'summary_markdown_template': str
+    }
+    """
+    default_summary = raw_text if isinstance(raw_text, str) else str(raw_text or "")
+
+    # 1. String: unwrap potential double-encoded JSON or fallback to text
+    if isinstance(obj, str):
+        cleaned_str = obj.strip()
+        if (cleaned_str.startswith("{") and cleaned_str.endswith("}")) or (cleaned_str.startswith("[") and cleaned_str.endswith("]")):
+            try:
+                nested = json.loads(cleaned_str, strict=False)
+                return _normalize_parsed_data(nested, raw_text)
+            except Exception:
+                pass
+        return {
+            "speakers": [],
+            "summary_markdown_template": cleaned_str or default_summary
+        }
+
+    # 2. List / Array: model returned array of speakers or list wrapping object
+    if isinstance(obj, list):
+        # Check if any element is an object with summary_markdown_template or speakers
+        for item in obj:
+            if isinstance(item, dict) and ("summary_markdown_template" in item or "speakers" in item):
+                return _normalize_parsed_data(item, raw_text)
+
+        # Treat list as speakers list
+        extracted_speakers = []
+        for idx, item in enumerate(obj):
+            if isinstance(item, dict):
+                spk_id = str(item.get("speaker_id") or item.get("name") or f"ผู้พูด {idx+1}").strip()
+                extracted_speakers.append({
+                    "speaker_id": spk_id,
+                    "voice_traits": str(item.get("voice_traits") or "").strip(),
+                    "sample_quote": str(item.get("sample_quote") or "").strip(),
+                    "suggested_role": str(item.get("suggested_role") or "").strip(),
+                })
+            elif item is not None:
+                extracted_speakers.append({
+                    "speaker_id": str(item).strip() or f"ผู้พูด {idx+1}",
+                    "voice_traits": "",
+                    "sample_quote": "",
+                    "suggested_role": "",
+                })
+        return {
+            "speakers": extracted_speakers,
+            "summary_markdown_template": default_summary
+        }
+
+    # 3. Dict: object structure
+    if isinstance(obj, dict):
+        raw_speakers = obj.get("speakers")
+        extracted_speakers = []
+        if isinstance(raw_speakers, list):
+            for idx, item in enumerate(raw_speakers):
+                if isinstance(item, dict):
+                    spk_id = str(item.get("speaker_id") or f"ผู้พูด {idx+1}").strip()
+                    extracted_speakers.append({
+                        "speaker_id": spk_id,
+                        "voice_traits": str(item.get("voice_traits") or "").strip(),
+                        "sample_quote": str(item.get("sample_quote") or "").strip(),
+                        "suggested_role": str(item.get("suggested_role") or "").strip(),
+                    })
+                elif item is not None:
+                    extracted_speakers.append({
+                        "speaker_id": str(item).strip() or f"ผู้พูด {idx+1}",
+                        "voice_traits": "",
+                        "sample_quote": "",
+                        "suggested_role": "",
+                    })
+        elif isinstance(raw_speakers, dict):
+            for k, v in raw_speakers.items():
+                if isinstance(v, dict):
+                    spk_id = str(v.get("speaker_id") or k).strip()
+                    extracted_speakers.append({
+                        "speaker_id": spk_id,
+                        "voice_traits": str(v.get("voice_traits") or "").strip(),
+                        "sample_quote": str(v.get("sample_quote") or "").strip(),
+                        "suggested_role": str(v.get("suggested_role") or "").strip(),
+                    })
+                else:
+                    extracted_speakers.append({
+                        "speaker_id": str(k).strip(),
+                        "voice_traits": "",
+                        "sample_quote": "",
+                        "suggested_role": str(v or "").strip(),
+                    })
+
+        raw_template = obj.get("summary_markdown_template")
+        if raw_template is None:
+            for alt_key in ["summary", "markdown", "template", "summary_template", "content"]:
+                if alt_key in obj and obj[alt_key] is not None:
+                    raw_template = obj[alt_key]
+                    break
+
+        if raw_template is None:
+            template_str = default_summary
+        elif isinstance(raw_template, str):
+            template_str = raw_template
+            trimmed_tpl = template_str.strip()
+            if trimmed_tpl.startswith("{") and trimmed_tpl.endswith("}"):
+                try:
+                    nested_dict = json.loads(trimmed_tpl, strict=False)
+                    if isinstance(nested_dict, dict) and ("summary_markdown_template" in nested_dict or "speakers" in nested_dict):
+                        return _normalize_parsed_data(nested_dict, raw_text)
+                except Exception:
+                    pass
+        else:
+            template_str = str(raw_template)
+
+        return {
+            "speakers": extracted_speakers,
+            "summary_markdown_template": template_str
+        }
+
+    # 4. Fallback for None or unsupported types
+    return {
+        "speakers": [],
+        "summary_markdown_template": default_summary
+    }
+
+
 def parse_gemini_response(response_text: str) -> dict:
-    """Robustly parse JSON response from Gemini, handling markdown code fences, unescaped newlines, and nested code blocks."""
+    """Robustly parse JSON response from Gemini, handling markdown code fences, unescaped newlines,
+    nested code blocks, arrays, double-encoded JSON, nulls, and strings.
+    Guaranteed to ALWAYS return a dict with 'speakers' (list of dicts) and 'summary_markdown_template' (str).
+    """
+    if response_text is None:
+        return {"speakers": [], "summary_markdown_template": ""}
+
+    if not isinstance(response_text, str):
+        response_text = str(response_text)
+
     cleaned = response_text.strip()
+    if not cleaned:
+        return {"speakers": [], "summary_markdown_template": ""}
 
     # 1. Direct parse attempt
     try:
-        return json.loads(cleaned, strict=False)
+        parsed = json.loads(cleaned, strict=False)
+        return _normalize_parsed_data(parsed, cleaned)
     except Exception:
         pass
 
-    # 2. Outermost markdown code fence
+    # 2. Outermost markdown code fence (Greedy regex preserves inner nested markdown code blocks)
     fence_match = re.search(r"```(?:json)?\s*\n([\s\S]*)\n```", cleaned)
     if fence_match:
         fence_content = fence_match.group(1).strip()
         try:
-            return json.loads(fence_content, strict=False)
+            parsed = json.loads(fence_content, strict=False)
+            return _normalize_parsed_data(parsed, cleaned)
         except Exception:
             pass
 
@@ -445,7 +584,7 @@ def parse_gemini_response(response_text: str) -> dict:
         try:
             obj, end_idx = decoder.raw_decode(cleaned, idx)
             if isinstance(obj, dict) and ("speakers" in obj or "summary_markdown_template" in obj):
-                return obj
+                return _normalize_parsed_data(obj, cleaned)
         except Exception:
             pass
         start_pos = idx + 1
@@ -454,30 +593,71 @@ def parse_gemini_response(response_text: str) -> dict:
     json_match = re.search(r"(\{[\s\S]*\})", cleaned)
     if json_match:
         try:
-            return json.loads(json_match.group(1), strict=False)
+            parsed = json.loads(json_match.group(1), strict=False)
+            return _normalize_parsed_data(parsed, cleaned)
         except Exception:
             pass
 
     # Fallback if model responded in plain markdown
     return {
         "speakers": [],
-        "summary_markdown_template": response_text
+        "summary_markdown_template": cleaned
     }
 
 
 def apply_speaker_mapping(template_text: str, speaker_mapping: dict) -> str:
-    """Replace {{speaker_id}} or [speaker_id] placeholders with real user-entered names."""
+    """Replace {{speaker_id}} or [speaker_id] placeholders with real user-entered names safely."""
+    if template_text is None:
+        return ""
+    if not isinstance(template_text, str):
+        template_text = str(template_text)
+
+    if not speaker_mapping or not isinstance(speaker_mapping, dict):
+        return template_text
+
     result = template_text
-    for spk_id, real_name in speaker_mapping.items():
+    for raw_spk_id, raw_real_name in speaker_mapping.items():
+        if raw_spk_id is None:
+            continue
+        spk_id = str(raw_spk_id).strip()
         if not spk_id:
             continue
-        chosen_name = real_name.strip() if real_name and real_name.strip() else spk_id
-        esc_spk = re.escape(spk_id.strip())
+
+        if raw_real_name is None:
+            chosen_name = spk_id
+        elif isinstance(raw_real_name, str):
+            chosen_name = raw_real_name.strip() or spk_id
+        else:
+            chosen_name = str(raw_real_name).strip() or spk_id
+
+        esc_spk = re.escape(spk_id)
         # Replace {{spk_id}} with optional surrounding spaces
         result = re.sub(r'\{\{\s*' + esc_spk + r'\s*\}\}', chosen_name, result)
         # Replace [spk_id] with optional surrounding spaces
         result = re.sub(r'\[\s*' + esc_spk + r'\s*\]', chosen_name, result)
     return result
+
+
+SUMMARY_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "speakers": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "speaker_id": {"type": "STRING"},
+                    "voice_traits": {"type": "STRING"},
+                    "sample_quote": {"type": "STRING"},
+                    "suggested_role": {"type": "STRING"},
+                },
+                "required": ["speaker_id"],
+            },
+        },
+        "summary_markdown_template": {"type": "STRING"},
+    },
+    "required": ["speakers", "summary_markdown_template"],
+}
 
 
 AI_JSON_PROMPT = """คุณคือเลขานุการและผู้เชี่ยวชาญด้านการวิเคราะห์การประชุมระดับผู้บริหาร (Senior Executive Meeting Analyst)
@@ -624,7 +804,8 @@ with st.container():
                             contents=[uploaded_remote_file, prompt_content],
                             config=types.GenerateContentConfig(
                                 temperature=0.2,
-                                response_mime_type="application/json"
+                                response_mime_type="application/json",
+                                response_schema=SUMMARY_RESPONSE_SCHEMA,
                             )
                         )
                         raw_ai_text = resp.text
@@ -646,24 +827,43 @@ with st.container():
                 if not raw_ai_text:
                     raise ValueError("ไม่ได้รับข้อมูลตอบกลับจากโมเดล")
 
-                # Parse JSON
+                # Layer 3: Atomic State Commit & Transactional Rollback
+                # Parse and validate completely before touching session state
                 parsed_data = parse_gemini_response(raw_ai_text)
+                if not isinstance(parsed_data, dict):
+                    raise ValueError(f"ข้อมูลตอบกลับไม่ถูกต้อง (คาดหวัง dict แต่ได้รับ {type(parsed_data).__name__})")
+
+                speaker_list = parsed_data.get("speakers", [])
+                if not isinstance(speaker_list, list):
+                    speaker_list = []
+                    parsed_data["speakers"] = speaker_list
+
+                # Stage speaker initial mappings in a local temporary dict
+                temp_spk_states = {}
+                for idx, raw_spk in enumerate(speaker_list):
+                    spk = raw_spk if isinstance(raw_spk, dict) else {"speaker_id": str(raw_spk)}
+                    spk_id = str(spk.get("speaker_id") or f"ผู้พูด {idx+1}").strip()
+                    sug_role = str(spk.get("suggested_role") or "").strip()
+                    if spk_id and f"spk_name_{spk_id}" not in st.session_state:
+                        temp_spk_states[f"spk_name_{spk_id}"] = sug_role
+
+                # Atomic commit: all validations passed, commit together into session_state
+                for k, v in temp_spk_states.items():
+                    st.session_state[k] = v
                 st.session_state["meeting_data"] = parsed_data
                 st.session_state["meeting_title"] = meeting_title
-
-                # Initialize speaker mappings in state
-                speaker_list = parsed_data.get("speakers", [])
-                for spk in speaker_list:
-                    spk_id = spk.get("speaker_id", "")
-                    sug_role = spk.get("suggested_role", "")
-                    if f"spk_name_{spk_id}" not in st.session_state:
-                        st.session_state[f"spk_name_{spk_id}"] = sug_role
 
                 progress_bar.progress(100, text="✅ สรุปและแยกแยะผู้พูดสำเร็จแล้ว!")
                 time.sleep(0.5)
                 progress_bar.empty()
 
             except Exception as e:
+                # Transactional rollback: prevent state poisoning
+                st.session_state.pop("meeting_data", None)
+                st.session_state.pop("meeting_title", None)
+                for k in list(st.session_state.keys()):
+                    if k.startswith("spk_name_") or k.startswith("spk_input_"):
+                        st.session_state.pop(k, None)
                 progress_bar.empty()
                 st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล: {e}")
 
@@ -684,11 +884,16 @@ with st.container():
 
 
 # ================= STEP 2: SPEAKER MAPPING & DOWNLOADS =================
-if "meeting_data" in st.session_state:
+# Layer 4: Step 2 UI Guard & Safe Speaker Handling
+if (
+    "meeting_data" in st.session_state
+    and isinstance(st.session_state["meeting_data"], dict)
+    and "summary_markdown_template" in st.session_state["meeting_data"]
+):
     meeting_data = st.session_state["meeting_data"]
-    meeting_title = st.session_state.get("meeting_title", "บันทึกการประชุม")
-    speakers = meeting_data.get("speakers", [])
-    raw_template = meeting_data.get("summary_markdown_template", "")
+    meeting_title = str(st.session_state.get("meeting_title", "บันทึกการประชุม") or "บันทึกการประชุม")
+    speakers = meeting_data.get("speakers") if isinstance(meeting_data.get("speakers"), list) else []
+    raw_template = str(meeting_data.get("summary_markdown_template") or "")
 
     # Speaker Mapping Card
     if speakers:
@@ -697,22 +902,23 @@ if "meeting_data" in st.session_state:
         st.caption("AI แยกแยะเสียงผู้พูดให้แล้ว สามารถพิมพ์ชื่อจริงเพื่อแทนที่ในบทสรุปและไฟล์เอกสารได้ทันที:")
 
         current_speaker_map = {}
-        for idx, spk in enumerate(speakers):
-            spk_id = spk.get("speaker_id", f"ผู้พูด {idx+1}")
-            voice_traits = spk.get("voice_traits", "ไม่ระบุลักษณะเสียง")
-            sample_quote = spk.get("sample_quote", "")
-            suggested_role = spk.get("suggested_role", "")
+        for idx, raw_spk in enumerate(speakers):
+            spk = raw_spk if isinstance(raw_spk, dict) else {"speaker_id": str(raw_spk)}
+            spk_id = str(spk.get("speaker_id") or f"ผู้พูด {idx+1}")
+            voice_traits = str(spk.get("voice_traits") or "ไม่ระบุลักษณะเสียง")
+            sample_quote = str(spk.get("sample_quote") or "")
+            suggested_role = str(spk.get("suggested_role") or "")
 
-            safe_spk_id = html.escape(str(spk_id))
-            safe_voice_traits = html.escape(str(voice_traits))
-            safe_sample_quote = html.escape(str(sample_quote))
+            safe_spk_id = html.escape(spk_id)
+            safe_voice_traits = html.escape(voice_traits)
+            safe_sample_quote = html.escape(sample_quote)
 
             st.markdown(f"<span class='speaker-pill'>🗣️ {safe_spk_id}</span> <span style='font-size:0.85rem; color:#8E8E93;'>({safe_voice_traits})</span>", unsafe_allow_html=True)
             if sample_quote:
                 st.markdown(f"<div class='quote-box'>💬 <em>\"{safe_sample_quote}\"</em></div>", unsafe_allow_html=True)
 
             user_entered_name = st.text_input(
-                f"ชื่อจริง / บทบาทของ {spk_id}:",
+                f"ชื่อจริง / บทบาทของ {safe_spk_id}:",
                 value=st.session_state.get(f"spk_name_{spk_id}", suggested_role),
                 key=f"spk_input_{idx}",
                 placeholder=f"เช่น คุณสมชาย หรือ {suggested_role}"
@@ -727,6 +933,10 @@ if "meeting_data" in st.session_state:
 
     # Apply real-time mapping
     final_summary_md = apply_speaker_mapping(raw_template, current_speaker_map)
+elif "meeting_data" in st.session_state:
+    # Auto-heal: Purge corrupted legacy state
+    st.session_state.pop("meeting_data", None)
+    st.session_state.pop("meeting_title", None)
 
     # Step 3: Action Bar & Downloads
     st.markdown('<div class="ios-card">', unsafe_allow_html=True)
