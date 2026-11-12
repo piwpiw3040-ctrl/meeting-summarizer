@@ -21,8 +21,10 @@ class MeetingPDF(FPDF):
         if self.page_no() > 1:
             self.set_font("Thai", "", 9)
             self.set_text_color(120, 130, 140)
-            self.cell(0, 8, self.doc_title, align=Align.L)
-            self.cell(0, 8, "เอกสารสรุปการประชุม AI", align=Align.R, new_x="LMARGIN", new_y="NEXT")
+            avail_w = self.w - self.l_margin - self.r_margin
+            half_w = avail_w / 2
+            self.cell(half_w, 8, self.doc_title, align=Align.L)
+            self.cell(half_w, 8, "เอกสารสรุปการประชุม AI", align=Align.R, new_x="LMARGIN", new_y="NEXT")
             self.set_draw_color(220, 225, 230)
             self.set_line_width(0.3)
             self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
@@ -82,6 +84,7 @@ def create_pdf_bytes(markdown_text: str, title: str = "บันทึกกา�
     pdf.add_font("Thai", "B", font_bold)
     pdf.alias_nb_pages()
     pdf.add_page()
+    pdf.set_font("Thai", "", 10.5)
 
     lines = markdown_text.splitlines()
     i = 0
@@ -119,9 +122,9 @@ def create_pdf_bytes(markdown_text: str, title: str = "บันทึกกา�
                 else:
                     col_widths = tuple(avail_width / col_count for _ in range(col_count))
 
-                hdr_style = FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=(27, 54, 93))
-                even_style = FontFace(color=(28, 28, 30), fill_color=(245, 248, 252))
-                odd_style = FontFace(color=(28, 28, 30), fill_color=(255, 255, 255))
+                hdr_style = FontFace(family="Thai", size_pt=10, emphasis="BOLD", color=(255, 255, 255), fill_color=(27, 54, 93))
+                even_style = FontFace(family="Thai", size_pt=10, color=(28, 28, 30), fill_color=(245, 248, 252))
+                odd_style = FontFace(family="Thai", size_pt=10, color=(28, 28, 30), fill_color=(255, 255, 255))
 
                 pdf.ln(2)
                 with pdf.table(col_widths=col_widths, text_align=Align.L) as table:

@@ -196,21 +196,28 @@ def main():
                 )
             print(f"   ✅ อัปโหลดสำเร็จ (Remote ID: {uploaded_remote_file.name})")
 
-            # Check status until ACTIVE
-            while uploaded_remote_file.state.name == "PROCESSING":
-                print("   ⏳ กำลังประมวลผลไฟล์เสียงบนคลาวด์... รอ 5 วินาที")
+            # Check status until ACTIVE (with timeout: max 60 rounds = 5 minutes)
+            max_check_rounds = 60
+            check_round = 0
+            while uploaded_remote_file.state.name == "PROCESSING" and check_round < max_check_rounds:
+                check_round += 1
+                print(f"   ⏳ กำลังประมวลผลไฟล์เสียงบนคลาวด์... รอ 5 วินาที (รอบที่ {check_round}/{max_check_rounds})")
                 time.sleep(5)
                 uploaded_remote_file = client.files.get(name=uploaded_remote_file.name)
+
+            if uploaded_remote_file.state.name == "PROCESSING":
+                raise TimeoutError("การประมวลผลไฟล์เสียงบน Gemini API ใช้เวลานานเกินกำหนด (Timeout 5 นาที)")
 
             if uploaded_remote_file.state.name == "FAILED":
                 raise RuntimeError("การประมวลผลไฟล์เสียงของ Gemini API ล้มเหลว")
 
             meeting_name = audio_file.stem.replace("_", " ").replace("-", " ")
             current_date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            prompt_content = SUMMARY_PROMPT.format(
-                meeting_name=meeting_name,
-                date_str=current_date_str,
-                filename=audio_file.name
+            prompt_content = (
+                SUMMARY_PROMPT
+                .replace("{meeting_name}", meeting_name)
+                .replace("{date_str}", current_date_str)
+                .replace("{filename}", audio_file.name)
             )
 
             summary_text = None

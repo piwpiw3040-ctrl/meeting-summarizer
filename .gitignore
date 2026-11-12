@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 
 # Virtual Environment
 .venv/
@@ -25,6 +26,6 @@ completed/
 *.mp4
 *.webm
 
-# Generated documents
-summaries/*.pdf
-summaries/*.docx
+# Generated documents & summaries
+summaries/
+
