@@ -216,8 +216,9 @@ def main():
             summary_text = None
             max_retries = 3
             candidate_models = [model_name]
-            if "gemini-flash-latest" not in candidate_models:
-                candidate_models.append("gemini-flash-latest")
+            for m in ["gemini-flash-latest", "gemini-3.7-flash", "gemini-3.5-flash"]:
+                if m not in candidate_models:
+                    candidate_models.append(m)
 
             for attempt in range(1, max_retries + 1):
                 cur_model = candidate_models[(attempt - 1) % len(candidate_models)]
@@ -257,13 +258,14 @@ def main():
 
             print(f"   💾 บันทึกสรุป Markdown เรียบร้อยที่: {target_summary_path.name}")
 
-            # Auto export to Word (.docx) and PDF (.pdf)
+            # Auto export to Word (.docx) and Native PDF (.pdf)
             try:
-                from convert_to_docs import markdown_to_docx, convert_docx_to_pdf
+                from convert_to_docs import markdown_to_docx, convert_md_to_pdf
                 docx_path = target_summary_path.with_suffix(".docx")
+                pdf_path = target_summary_path.with_suffix(".pdf")
                 markdown_to_docx(target_summary_path, docx_path)
                 try:
-                    convert_docx_to_pdf(docx_path)
+                    convert_md_to_pdf(target_summary_path, pdf_path)
                 except Exception as pdf_err:
                     print(f"   ⚠️ ไม่สามารถแปลงเป็น PDF ได้: {pdf_err}")
             except Exception as docx_err:
