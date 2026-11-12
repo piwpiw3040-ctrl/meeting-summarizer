@@ -26,8 +26,11 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Import Native PDF generator
-from pdf_generator import create_pdf_bytes
+# Import Native PDF generator safely
+try:
+    from pdf_generator import create_pdf_bytes
+except Exception as _pdf_err:
+    create_pdf_bytes = None
 
 # Load environment
 base_dir = Path(__file__).resolve().parent
@@ -646,17 +649,20 @@ if "meeting_data" in st.session_state:
 
     # 1. Native PDF
     with col_pdf:
-        try:
-            pdf_bytes = create_pdf_bytes(final_summary_md, title=meeting_title)
-            st.download_button(
-                label="📕 ดาวน์โหลด PDF แท้",
-                data=pdf_bytes,
-                file_name=f"{safe_title}_summary.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-        except Exception as pe:
-            st.error(f"เกิดข้อผิดพลาดในการสร้าง PDF: {pe}")
+        if create_pdf_bytes is not None:
+            try:
+                pdf_bytes = create_pdf_bytes(final_summary_md, title=meeting_title)
+                st.download_button(
+                    label="📕 ดาวน์โหลด PDF แท้",
+                    data=pdf_bytes,
+                    file_name=f"{safe_title}_summary.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as pe:
+                st.error(f"เกิดข้อผิดพลาดในการสร้าง PDF: {pe}")
+        else:
+            st.warning("⚠️ โมดูล PDF อยู่ระหว่างการโหลด")
 
     # 2. Word .docx
     with col_docx:

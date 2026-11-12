@@ -70,7 +70,13 @@ def create_pdf_bytes(markdown_text: str, title: str = "บันทึกกา�
     pdf = MeetingPDF(doc_title=title, orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=16)
     pdf.set_margins(left=18, top=16, right=18)
-    pdf.set_text_shaping(True)
+    
+    # Enable text shaping if uharfbuzz is available; otherwise fallback to standard TTF rendering
+    try:
+        import uharfbuzz
+        pdf.set_text_shaping(True)
+    except Exception:
+        pass
 
     pdf.add_font("Thai", "", font_reg)
     pdf.add_font("Thai", "B", font_bold)
