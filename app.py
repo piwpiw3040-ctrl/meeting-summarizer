@@ -31,9 +31,10 @@ if sys.platform == "win32":
 
 # Import Native PDF generator safely
 try:
-    from pdf_generator import create_pdf_bytes
+    from pdf_generator import create_pdf_bytes, strip_schedule_section
 except Exception as _pdf_err:
     create_pdf_bytes = None
+    strip_schedule_section = lambda x: x
 
 # Load environment
 base_dir = Path(__file__).resolve().parent
@@ -700,10 +701,10 @@ AI_JSON_PROMPT = """คุณคือเลขานุการและผู
   1. # 📋 บันทึกการประชุม: {meeting_name}
   2. ## 🎯 สรุปภาพรวมสำหรับผู้บริหาร (Executive Summary)
   3. ## ⚖️ มติที่ประชุมและข้อตกลงร่วมกัน (Decisions & Key Agreements)
-  4. ## ✅ รายการสิ่งที่ต้องทำ (Action Items) (จัดทำเป็นตาราง Markdown ระบุ ลำดับ, สิ่งที่ต้องทำ, ผู้รับผิดชอบ (ใช้ {{ผู้พูด X}}), กำหนดส่ง)
+  4. ## ✅ รายการสิ่งที่ต้องทำ (Action Items) (จัดทำเป็นตาราง Markdown ระบุ ลำดับ, สิ่งที่ต้องทำ (Action Item), ผู้รับผิดชอบ (ใช้ {{ผู้พูด X}}), หมายเหตุ / เงื่อนไข)
   5. ## 📝 ประเด็นสำคัญแยกตามวาระการพูดคุย (Key Discussion Points)
   6. ## ⚠️ ปัญหา อุปสรรค และความเสี่ยง (Blockers & Risks)
-  7. ## 📅 การติดตามงานและนัดหมายครั้งถัดไป (Next Steps & Follow-up)
+- ห้ามใส่หัวข้อกำหนดการ การนัดหมาย หรือการติดตามงานครั้งถัดไปในบทสรุป (ตัดออกทั้งหมด)
 - ตอบกลับเฉพาะ JSON เท่านั้น ไม่ต้องมีข้อความเกริ่นนำ
 """
 
@@ -955,8 +956,9 @@ if (
     else:
         current_speaker_map = {}
 
-    # Apply real-time mapping
+    # Apply real-time mapping & strip schedule section
     final_summary_md = apply_speaker_mapping(raw_template, current_speaker_map)
+    final_summary_md = strip_schedule_section(final_summary_md)
 
     # Step 3: Action Bar & Downloads
     st.markdown('<div class="ios-card">', unsafe_allow_html=True)
